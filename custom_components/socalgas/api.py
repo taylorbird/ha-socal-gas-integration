@@ -204,9 +204,22 @@ class SoCalGasAPI:
                         f"Unexpected GNN mapping response: {data}"
                     )
 
+                _LOGGER.info("GNN mapping keys: %s", list(mapping.keys()))
+
                 gnn_id = str(
                     mapping.get("GnnId", "")
                     or mapping.get("gnnId", "")
+                )
+                service_location_id = str(
+                    mapping.get("ServiceLocationId", "")
+                    or mapping.get("serviceLocationId", "")
+                    or mapping.get("ServicePointId", "")
+                    or mapping.get("servicePointId", "")
+                )
+                _LOGGER.info(
+                    "GNN mapping result: gnn=%s, slid=%s, meter=%s",
+                    gnn_id, service_location_id,
+                    mapping.get("MeterNumber", mapping.get("meterNumber", "")),
                 )
                 return AccountInfo(
                     account_number=account_number,
@@ -215,11 +228,7 @@ class SoCalGasAPI:
                         or mapping.get("meterNumber", "")
                     ),
                     gnn_id=gnn_id,
-                    service_location_id=str(
-                        mapping.get("ServiceLocationId", "")
-                        or mapping.get("serviceLocationId", "")
-                        or gnn_id
-                    ),
+                    service_location_id=service_location_id or gnn_id,
                 )
         except aiohttp.ClientError as err:
             raise SoCalGasConnectionError(

@@ -7,11 +7,9 @@ from datetime import datetime, timedelta, timezone
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
-    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -48,12 +46,6 @@ async def async_setup_entry(
 class SoCalGasStatusSensor(CoordinatorEntity, SensorEntity):
     """Sensor showing the integration's current status."""
 
-    entity_description = SensorEntityDescription(
-        key="status",
-        name="SoCal Gas Status",
-        icon="mdi:fire",
-    )
-
     def __init__(
         self, coordinator: SoCalGasCoordinator, entry: ConfigEntry, slug: str,
     ) -> None:
@@ -61,6 +53,8 @@ class SoCalGasStatusSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._entry = entry
         self._attr_unique_id = f"{DOMAIN}_{slug}_status"
+        self._attr_name = "SoCal Gas Status"
+        self._attr_icon = "mdi:fire"
         self._attr_entity_category = "diagnostic"
 
     @property
@@ -97,17 +91,27 @@ class _SoCalGasStatisticSensor(CoordinatorEntity, SensorEntity):
         coordinator: SoCalGasCoordinator,
         entry: ConfigEntry,
         slug: str,
-        description: SensorEntityDescription,
+        key: str,
+        name: str,
+        icon: str,
+        unit: str,
+        device_class: SensorDeviceClass | None,
         statistic_id: str,
         period: str,
     ) -> None:
         super().__init__(coordinator)
-        self.entity_description = description
         self._entry = entry
         self._slug = slug
         self._statistic_id = statistic_id
         self._period = period  # "day" or "month"
-        self._attr_unique_id = f"{DOMAIN}_{slug}_{description.key}"
+        self._attr_unique_id = f"{DOMAIN}_{slug}_{key}"
+        self._attr_name = name
+        self._attr_icon = icon
+        self._attr_native_unit_of_measurement = unit
+        self._attr_state_class = SensorStateClass.TOTAL
+        self._attr_suggested_display_precision = 2 if unit == "USD" else 1
+        if device_class:
+            self._attr_device_class = device_class
         self._cached_value: float | None = None
 
     async def async_added_to_hass(self) -> None:
@@ -172,17 +176,12 @@ class SoCalGasUsageTodaySensor(_SoCalGasStatisticSensor):
 
     def __init__(self, coordinator, entry, slug):
         super().__init__(
-            coordinator,
-            entry,
-            slug,
-            SensorEntityDescription(
-                key="usage_today",
-                name="SoCal Gas Usage Today",
-                icon="mdi:fire",
-                native_unit_of_measurement="ft³",
-                state_class=SensorStateClass.TOTAL,
-                suggested_display_precision=1,
-            ),
+            coordinator, entry, slug,
+            key="usage_today",
+            name="SoCal Gas Usage Today",
+            icon="mdi:fire",
+            unit="ft³",
+            device_class=None,
             statistic_id=f"{DOMAIN}:gas_consumption_{slug}",
             period="day",
         )
@@ -193,18 +192,12 @@ class SoCalGasCostTodaySensor(_SoCalGasStatisticSensor):
 
     def __init__(self, coordinator, entry, slug):
         super().__init__(
-            coordinator,
-            entry,
-            slug,
-            SensorEntityDescription(
-                key="cost_today",
-                name="SoCal Gas Cost Today",
-                icon="mdi:currency-usd",
-                device_class=SensorDeviceClass.MONETARY,
-                native_unit_of_measurement="USD",
-                state_class=SensorStateClass.TOTAL,
-                suggested_display_precision=2,
-            ),
+            coordinator, entry, slug,
+            key="cost_today",
+            name="SoCal Gas Cost Today",
+            icon="mdi:currency-usd",
+            unit="USD",
+            device_class=SensorDeviceClass.MONETARY,
             statistic_id=f"{DOMAIN}:gas_cost_{slug}",
             period="day",
         )
@@ -215,17 +208,12 @@ class SoCalGasUsageThisMonthSensor(_SoCalGasStatisticSensor):
 
     def __init__(self, coordinator, entry, slug):
         super().__init__(
-            coordinator,
-            entry,
-            slug,
-            SensorEntityDescription(
-                key="usage_this_month",
-                name="SoCal Gas Usage This Month",
-                icon="mdi:fire",
-                native_unit_of_measurement="ft³",
-                state_class=SensorStateClass.TOTAL,
-                suggested_display_precision=1,
-            ),
+            coordinator, entry, slug,
+            key="usage_this_month",
+            name="SoCal Gas Usage This Month",
+            icon="mdi:fire",
+            unit="ft³",
+            device_class=None,
             statistic_id=f"{DOMAIN}:gas_consumption_{slug}",
             period="month",
         )
@@ -236,18 +224,12 @@ class SoCalGasCostThisMonthSensor(_SoCalGasStatisticSensor):
 
     def __init__(self, coordinator, entry, slug):
         super().__init__(
-            coordinator,
-            entry,
-            slug,
-            SensorEntityDescription(
-                key="cost_this_month",
-                name="SoCal Gas Cost This Month",
-                icon="mdi:currency-usd",
-                device_class=SensorDeviceClass.MONETARY,
-                native_unit_of_measurement="USD",
-                state_class=SensorStateClass.TOTAL,
-                suggested_display_precision=2,
-            ),
+            coordinator, entry, slug,
+            key="cost_this_month",
+            name="SoCal Gas Cost This Month",
+            icon="mdi:currency-usd",
+            unit="USD",
+            device_class=SensorDeviceClass.MONETARY,
             statistic_id=f"{DOMAIN}:gas_cost_{slug}",
             period="month",
         )
