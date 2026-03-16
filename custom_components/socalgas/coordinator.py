@@ -369,12 +369,24 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
         )
 
         async_dismiss(self.hass, notification_id)
+
+        summary_msg = (
+            f"{len(unique_readings)} new readings imported "
+            f"({merged[0].start.strftime('%b %d, %Y')} – "
+            f"{merged[-1].start.strftime('%b %d, %Y')})"
+        )
         _LOGGER.info(
             "%s complete: %d new readings + %d existing merged (%s to %s)",
             label, len(unique_readings),
             len(merged) - len(unique_readings),
             merged[0].start.date(),
             merged[-1].start.date(),
+        )
+        async_create(
+            self.hass,
+            summary_msg,
+            title=f"SoCal Gas {label} Complete",
+            notification_id=f"{notification_id}_done",
         )
 
         return len(unique_readings)

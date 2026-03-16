@@ -260,8 +260,10 @@ class SoCalGasAPI:
         }
 
         _LOGGER.info(
-            "Green Button download: %s to %s",
+            "Green Button download: %s to %s (account=%s, meter=%s, gnn=%s, slid=%s)",
             start_date.strftime("%m/%d/%y"), end_date.strftime("%m/%d/%y"),
+            info.account_number, info.meter_number, info.gnn_id,
+            info.service_location_id,
         )
 
         try:
@@ -279,8 +281,13 @@ class SoCalGasAPI:
                     raise SoCalGasAuthError("AccessToken expired")
                 if resp.status != 200:
                     text = await resp.text()
+                    _LOGGER.error(
+                        "Green Button download failed (%s). "
+                        "Request: %s. Response: %s",
+                        resp.status, request_body, text[:500],
+                    )
                     raise SoCalGasConnectionError(
-                        f"Green Button download failed ({resp.status}): {text}"
+                        f"Green Button download failed ({resp.status}): {text[:200]}"
                     )
                 return await resp.read()
         except aiohttp.ClientError as err:

@@ -62,13 +62,41 @@ export default async ({ page, context }) => {
   // Step 1: Login page
   await page.goto('https://myaccount.socalgas.com/ui/login', {
     waitUntil: 'networkidle2',
-    timeout: 60000,
+    timeout: 90000,
   });
 
   // Step 2: Fill credentials using keyboard input
   // Login form uses web components (scg-text-field) with shadow DOM,
-  // so regular selectors can't reach the inputs. We get element handles
-  // to the shadow DOM inputs and use keyboard.type() for real key events.
+  // so regular selectors can't reach the inputs. Wait for shadow DOM
+  // inputs to be available before interacting — on slow connections
+  // the web components may not be ready immediately after networkidle2.
+  const findInputs = () => {
+    let emailInput = null, passInput = null;
+    const fields = document.querySelectorAll('scg-text-field');
+    for (const host of fields) {
+      const sr = host.shadowRoot;
+      if (!sr) continue;
+      const inp = sr.querySelector('input');
+      if (!inp) continue;
+      if (inp.type === 'email' || inp.id === 'email') emailInput = inp;
+      if (inp.type === 'password' || inp.id === 'password') passInput = inp;
+    }
+    return emailInput && passInput;
+  };
+
+  // Poll for up to 30s for the shadow DOM inputs to appear
+  try {
+    await page.waitForFunction(findInputs, { timeout: 30000 });
+  } catch (e) {
+    return {
+      data: { error: 'Login form did not become ready within 30s — site may be experiencing issues', error_type: 'connection' },
+      type: 'application/json',
+    };
+  }
+
+  // Extra settle time for web component framework
+  await new Promise(r => setTimeout(r, 1000));
+
   const emailHandle = await page.evaluateHandle(() => {
     const fields = document.querySelectorAll('scg-text-field');
     for (const host of fields) {
@@ -140,13 +168,36 @@ export default async ({ page, context }) => {
   try {
     await page.waitForFunction(
       () => !window.location.href.includes('/ui/login'),
-      { timeout: 60000 }
+      { timeout: 90000 }
     );
   } catch (e) {
+    // Before blaming credentials, check if there's an error message on the page
+    const pageError = await page.evaluate(() => {
+      // Check for visible error messages in common patterns
+      const errorEls = document.querySelectorAll(
+        '.error-message, .alert-danger, [role="alert"], .scg-error, .error-text'
+      );
+      for (const el of errorEls) {
+        const text = el.textContent?.trim();
+        if (text) return text;
+      }
+      // Check shadow DOM of scg-* elements for error states
+      const allScg = document.querySelectorAll('[class*="error"], [class*="Error"]');
+      for (const el of allScg) {
+        const text = el.textContent?.trim();
+        if (text) return text;
+      }
+      return null;
+    });
+
+    const detail = pageError
+      ? `Login page error: ${pageError}`
+      : 'Login did not redirect within 90s. The site may be slow or your credentials may be incorrect.';
+
     return {
       data: {
-        error: 'Login failed — page did not redirect. Check your username and password.',
-        error_type: 'auth',
+        error: detail,
+        error_type: pageError ? 'auth' : 'connection',
       },
       type: 'application/json',
     };
@@ -166,21 +217,81 @@ export default async ({ page, context }) => {
     };
   }
 
-  // Step 3.5: Detect CCCI interstitial popup
+  // Step 3.5: Detect and attempt to dismiss interstitial popups
+  // SoCal Gas periodically shows interstitials for MFA enrollment,
+  // contact info confirmation, etc. Many have a "skip" or "remind me
+  // later" option we can click to proceed without user intervention.
   if (page.url().includes('/ui/interstitials')) {
-    return {
-      data: {
-        error: 'SoCal Gas requires you to confirm account information. Please log in to socalgas.com in a browser, address the popup, then retry.',
-        error_type: 'interstitial',
-      },
-      type: 'application/json',
-    };
+    const dismissed = await page.evaluate(() => {
+      // Look for dismiss/skip/remind-me-later buttons in both regular
+      // DOM and shadow DOM (scg-button web components).
+      const dismissPatterns = [
+        /remind me later/i,
+        /skip/i,
+        /not now/i,
+        /maybe later/i,
+        /no thanks/i,
+        /close/i,
+        /dismiss/i,
+      ];
+
+      // Check scg-button shadow DOM elements
+      const scgBtns = document.querySelectorAll('scg-button');
+      for (const host of scgBtns) {
+        const sr = host.shadowRoot;
+        if (!sr) continue;
+        const b = sr.querySelector('button');
+        if (!b) continue;
+        const text = b.textContent.trim();
+        if (dismissPatterns.some(p => p.test(text))) {
+          b.click();
+          return text;
+        }
+      }
+
+      // Check regular buttons and links
+      const clickables = document.querySelectorAll('button, a, [role="button"]');
+      for (const el of clickables) {
+        const text = el.textContent.trim();
+        if (dismissPatterns.some(p => p.test(text))) {
+          el.click();
+          return text;
+        }
+      }
+
+      return null;
+    });
+
+    if (dismissed) {
+      // Wait for navigation after dismissing
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        await page.waitForFunction(
+          () => !window.location.href.includes('/ui/interstitials'),
+          { timeout: 15000 }
+        );
+      } catch (e) {
+        // Dismiss clicked but didn't navigate away — still stuck
+      }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // If still on interstitials after attempted dismiss, give up
+    if (page.url().includes('/ui/interstitials')) {
+      return {
+        data: {
+          error: 'SoCal Gas is showing a required prompt (MFA setup, account verification, etc.) that cannot be skipped. Please log in to myaccount.socalgas.com in a browser, complete the prompt, then retry.',
+          error_type: 'interstitial',
+        },
+        type: 'application/json',
+      };
+    }
   }
 
   // Step 4: Navigate to usage page to trigger SSO + AccessToken
   await page.goto('https://myaccount.socalgas.com/ui/ways-to-save/analyze-usage', {
     waitUntil: 'networkidle2',
-    timeout: 60000,
+    timeout: 90000,
   });
 
   // Wait for SmartCMobile requests to fire
@@ -208,7 +319,7 @@ export default async ({ page, context }) => {
 """
 
 
-def _build_function_url(base_url: str, timeout_ms: int = 120000) -> str:
+def _build_function_url(base_url: str, timeout_ms: int = 180000) -> str:
     """Build the /function endpoint URL from the Browserless base URL.
 
     Handles base URLs with or without query params (e.g. token).
@@ -253,7 +364,7 @@ async def browser_authenticate(
                     "code": _LOGIN_JS,
                     "context": {"username": username, "password": password},
                 },
-                timeout=aiohttp.ClientTimeout(total=120),
+                timeout=aiohttp.ClientTimeout(total=180),
             ) as resp:
                 if resp.status == 401:
                     raise SoCalGasConnectionError(
