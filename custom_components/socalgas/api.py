@@ -204,7 +204,7 @@ class SoCalGasAPI:
                         f"Unexpected GNN mapping response: {data}"
                     )
 
-                _LOGGER.info("GNN mapping keys: %s", list(mapping.keys()))
+                _LOGGER.warning("GNN mapping keys: %s", list(mapping.keys()))
 
                 gnn_id = str(
                     mapping.get("GnnId", "")
@@ -216,7 +216,7 @@ class SoCalGasAPI:
                     or mapping.get("ServicePointId", "")
                     or mapping.get("servicePointId", "")
                 )
-                _LOGGER.info(
+                _LOGGER.warning(
                     "GNN mapping result: gnn=%s, slid=%s, meter=%s",
                     gnn_id, service_location_id,
                     mapping.get("MeterNumber", mapping.get("meterNumber", "")),
