@@ -10,8 +10,6 @@ from homeassistant.components.file_upload import process_uploaded_file
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
-    DateSelector,
-    DateSelectorConfig,
     FileSelector,
     FileSelectorConfig,
     NumberSelector,
@@ -27,6 +25,7 @@ from .const import (
     CONF_ACCOUNT_NAME,
     CONF_ACCOUNT_NUMBER,
     CONF_BROWSERLESS_URL,
+    CONF_INITIAL_IMPORT_DONE,
     CONF_LOOKBACK_DAYS,
     CONF_METER_NUMBER,
     CONF_PASSWORD,
@@ -365,57 +364,24 @@ class SoCalGasOptionsFlow(OptionsFlow):
     async def async_step_redownload(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle re-download of a date range."""
-        from datetime import date, datetime, timedelta, timezone
-
-        errors: dict[str, str] = {}
-
+        """Handle re-download of all historical data."""
         if user_input is not None:
-            start_date = date.fromisoformat(user_input["start_date"])
-            end_date = date.fromisoformat(user_input["end_date"])
-            earliest = date.today() - timedelta(days=730)
-
-            if start_date < earliest:
-                errors["start_date"] = "date_too_old"
-            elif end_date < start_date:
-                errors["end_date"] = "end_before_start"
-            else:
-                start = datetime.combine(
-                    start_date, datetime.min.time(), tzinfo=timezone.utc
-                )
-                end = datetime.combine(
-                    end_date, datetime.min.time(), tzinfo=timezone.utc
-                )
-                coordinator = self.hass.data[DOMAIN].get(self._entry.entry_id)
-                if coordinator:
-                    self._entry.async_create_background_task(
-                        self.hass,
-                        coordinator.async_redownload_range(start, end),
-                        f"{DOMAIN}_redownload_{self._entry.entry_id}",
-                    )
-                return self.async_abort(reason="redownload_started")
-
-        today = date.today()
-        earliest = today - timedelta(days=730)
-        default_start = (today - timedelta(days=30)).isoformat()
-        default_end = today.isoformat()
+            # Reset initial_import_done so the coordinator re-fetches everything
+            self.hass.config_entries.async_update_entry(
+                self._entry,
+                data={
+                    **self._entry.data,
+                    CONF_INITIAL_IMPORT_DONE: False,
+                },
+            )
+            coordinator = self.hass.data[DOMAIN].get(self._entry.entry_id)
+            if coordinator:
+                await coordinator.async_request_refresh()
+            return self.async_abort(reason="redownload_started")
 
         return self.async_show_form(
             step_id="redownload",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        "start_date", default=default_start
-                    ): DateSelector(DateSelectorConfig()),
-                    vol.Required(
-                        "end_date", default=default_end
-                    ): DateSelector(DateSelectorConfig()),
-                }
-            ),
-            errors=errors,
-            description_placeholders={
-                "earliest_date": earliest.strftime("%B %-d, %Y"),
-            },
+            data_schema=vol.Schema({}),
         )
 
     async def async_step_upload(

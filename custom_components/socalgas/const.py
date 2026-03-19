@@ -11,3 +11,4 @@ CONF_REFRESH_INTERVAL_HOURS = "refresh_interval_hours"
 DEFAULT_REFRESH_INTERVAL_HOURS = 24
 CONF_BROWSERLESS_URL = "browserless_url"
 DEFAULT_BROWSERLESS_URL = "http://browserless:3000"
+CONF_INITIAL_IMPORT_DONE = "initial_import_done"

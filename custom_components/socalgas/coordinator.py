@@ -20,6 +20,7 @@ from homeassistant.helpers.update_coordinator import (
 from .api import SoCalGasAPI, SoCalGasAuthError, SoCalGasConnectionError
 from .const import (
     CONF_BROWSERLESS_URL,
+    CONF_INITIAL_IMPORT_DONE,
     CONF_PASSWORD,
     CONF_REFRESH_INTERVAL_HOURS,
     CONF_USERNAME,
@@ -36,8 +37,6 @@ from .statistics import (
 from .usage_parser import hourly_to_readings
 
 _LOGGER = logging.getLogger(__name__)
-
-CONF_INITIAL_IMPORT_DONE = "initial_import_done"
 
 
 class SoCalGasCoordinator(DataUpdateCoordinator):
