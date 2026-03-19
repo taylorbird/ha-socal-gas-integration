@@ -13,9 +13,6 @@ SMARTCMOBILE_BASE = "https://socal.smartcmobile.com"
 
 ACCOUNT_LIST_URL = f"{SMARTCMOBILE_BASE}/connectorsso/api/account/list"
 GNN_MAPPING_URL = f"{SMARTCMOBILE_BASE}/connectorsso/api/usage/gnnmapping"
-GREEN_BUTTON_URL = (
-    f"{SMARTCMOBILE_BASE}/greenbuttonservices/api/greenbutton/zipfile"
-)
 
 SMARTCMOBILE_HEADERS = {
     "PortalType": "R",
@@ -38,8 +35,8 @@ class AccountInfo:
 
     account_number: str  # 10-digit account number
     meter_number: str
-    gnn_id: str
-    service_location_id: str
+    gnn_id: int
+    service_location: str
 
 
 class SoCalGasAPI:
@@ -206,100 +203,177 @@ class SoCalGasAPI:
 
                 _LOGGER.warning("GNN mapping keys: %s", list(mapping.keys()))
 
-                gnn_id = str(
-                    mapping.get("GnnId", "")
-                    or mapping.get("gnnId", "")
-                )
-                service_location_id = str(
+                # GnnId must be a valid integer
+                gnn_id_raw = mapping.get("GnnId") or mapping.get("gnnId")
+                if gnn_id_raw is None:
+                    raise SoCalGasConnectionError(
+                        f"GNN mapping missing GnnId: {mapping}"
+                    )
+                try:
+                    gnn_id = int(gnn_id_raw)
+                except (TypeError, ValueError) as err:
+                    raise SoCalGasConnectionError(
+                        f"GNN mapping GnnId is not a valid integer: {gnn_id_raw}"
+                    ) from err
+
+                # Service location: prefer API value, fall back to derivation
+                service_location = str(
                     mapping.get("ServiceLocationId", "")
                     or mapping.get("serviceLocationId", "")
                     or mapping.get("ServicePointId", "")
                     or mapping.get("servicePointId", "")
                 )
+                if not service_location:
+                    # Derive from account number: replace last digit with 0
+                    service_location = account_number[:-1] + "0"
+
+                meter_number = str(
+                    mapping.get("MeterNumber", "")
+                    or mapping.get("meterNumber", "")
+                )
+
                 _LOGGER.warning(
-                    "GNN mapping result: gnn=%s, slid=%s, meter=%s",
-                    gnn_id, service_location_id,
-                    mapping.get("MeterNumber", mapping.get("meterNumber", "")),
+                    "GNN mapping result: gnn=%s, sl=%s, meter=%s",
+                    gnn_id, service_location, meter_number,
                 )
                 return AccountInfo(
                     account_number=account_number,
-                    meter_number=str(
-                        mapping.get("MeterNumber", "")
-                        or mapping.get("meterNumber", "")
-                    ),
+                    meter_number=meter_number,
                     gnn_id=gnn_id,
-                    service_location_id=service_location_id or gnn_id,
+                    service_location=service_location,
                 )
         except aiohttp.ClientError as err:
             raise SoCalGasConnectionError(
                 f"GNN mapping error: {err}"
             ) from err
 
-    async def download_green_button(
-        self,
-        start_date: datetime,
-        end_date: datetime,
-    ) -> bytes:
-        """Download Green Button ZIP data for the given date range.
+    async def verify_account(self) -> None:
+        """Fire-and-forget account verification. Logs status, never raises."""
+        try:
+            if not self._access_token or not self._account_info:
+                _LOGGER.debug("verify_account: not authenticated, skipping")
+                return
+            session = await self._ensure_session()
+            info = self._account_info
+            url = (
+                f"{SMARTCMOBILE_BASE}/connectorsso/api/module/verify"
+                f"?accountId={info.account_number}"
+            )
+            async with session.get(
+                url,
+                headers={
+                    **SMARTCMOBILE_HEADERS,
+                    "AccessToken": self._access_token,
+                    "Content-Type": "application/json",
+                },
+            ) as resp:
+                _LOGGER.debug("verify_account status: %s", resp.status)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("verify_account failed", exc_info=True)
 
-        Args:
-            start_date: Start of the data range.
-            end_date: End of the data range.
+    async def fetch_monthly(self) -> list[dict]:
+        """Fetch monthly billing cycle data.
 
-        Returns:
-            ZIP file content as bytes.
+        Returns a list of billing cycle dicts.
         """
         if not self._access_token or not self._account_info:
-            raise SoCalGasAuthError("Must authenticate before downloading")
+            raise SoCalGasAuthError("Must authenticate before fetching data")
 
         session = await self._ensure_session()
         info = self._account_info
 
         request_body = {
             "MeterNumber": info.meter_number,
-            "AccountNumber": info.account_number,
-            "StartDate": start_date.strftime("%m/%d/%y"),
-            "EndDate": end_date.strftime("%m/%d/%y"),
-            "CustomAttribute": {
-                "GnnId": info.gnn_id,
-                "ServiceLocationId": info.service_location_id,
-            },
-            "ServiceType": "GAS",
-            "Type": "HOURLY",
+            "GnnId": info.gnn_id,
+            "AccountId": info.account_number,
         }
-
-        _LOGGER.info(
-            "Green Button download: %s to %s (account=%s, meter=%s, gnn=%s, slid=%s)",
-            start_date.strftime("%m/%d/%y"), end_date.strftime("%m/%d/%y"),
-            info.account_number, info.meter_number, info.gnn_id,
-            info.service_location_id,
-        )
 
         try:
             async with session.post(
-                GREEN_BUTTON_URL,
+                f"{SMARTCMOBILE_BASE}/connectorsso/api/usage/monthly",
                 json=request_body,
                 headers={
                     **SMARTCMOBILE_HEADERS,
                     "AccessToken": self._access_token,
                     "Content-Type": "application/json",
-                    "Accept": "application/zip, application/json",
                 },
             ) as resp:
                 if resp.status == 401:
                     raise SoCalGasAuthError("AccessToken expired")
                 if resp.status != 200:
                     text = await resp.text()
-                    _LOGGER.error(
-                        "Green Button download failed (%s). "
-                        "Request: %s. Response: %s",
-                        resp.status, request_body, text[:500],
-                    )
                     raise SoCalGasConnectionError(
-                        f"Green Button download failed ({resp.status}): {text[:200]}"
+                        f"Monthly usage request failed ({resp.status}): {text[:200]}"
                     )
-                return await resp.read()
+                data = await resp.json()
+                # Check for API-level error codes
+                if isinstance(data, dict) and data.get("Code") and data["Code"] != 200:
+                    raise SoCalGasConnectionError(
+                        f"Monthly usage API error (Code {data['Code']}): "
+                        f"{data.get('Message', '')}"
+                    )
+                # Return the billing cycles list
+                if isinstance(data, dict):
+                    return data.get("BillingCycles", data.get("billingCycles", []))
+                if isinstance(data, list):
+                    return data
+                return []
         except aiohttp.ClientError as err:
             raise SoCalGasConnectionError(
-                f"Green Button download error: {err}"
+                f"Monthly usage request error: {err}"
+            ) from err
+
+    async def fetch_hourly(self, billing_cycle: dict) -> list[dict]:
+        """Fetch hourly usage data for a billing cycle.
+
+        Args:
+            billing_cycle: A billing cycle dict (from fetch_monthly).
+
+        Returns:
+            List of hourly reading dicts from "HourlyUsage" key.
+        """
+        if not self._access_token or not self._account_info:
+            raise SoCalGasAuthError("Must authenticate before fetching data")
+
+        session = await self._ensure_session()
+        info = self._account_info
+
+        request_body = {
+            "MeterNumber": info.meter_number,
+            "GnnId": info.gnn_id,
+            "AccountNumber": info.account_number,
+            "ServiceLocation": info.service_location,
+            "BillCycle": billing_cycle,
+        }
+
+        try:
+            async with session.post(
+                f"{SMARTCMOBILE_BASE}/connectorsso/api/usage/hourly",
+                json=request_body,
+                headers={
+                    **SMARTCMOBILE_HEADERS,
+                    "AccessToken": self._access_token,
+                    "Content-Type": "application/json",
+                },
+            ) as resp:
+                if resp.status == 401:
+                    raise SoCalGasAuthError("AccessToken expired")
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise SoCalGasConnectionError(
+                        f"Hourly usage request failed ({resp.status}): {text[:200]}"
+                    )
+                data = await resp.json()
+                # Check for API-level error codes
+                if isinstance(data, dict) and data.get("Code") and data["Code"] != 200:
+                    raise SoCalGasConnectionError(
+                        f"Hourly usage API error (Code {data['Code']}): "
+                        f"{data.get('Message', '')}"
+                    )
+                if isinstance(data, dict):
+                    return data.get("HourlyUsage", [])
+                return []
+        except aiohttp.ClientError as err:
+            raise SoCalGasConnectionError(
+                f"Hourly usage request error: {err}"
             ) from err

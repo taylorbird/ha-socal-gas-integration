@@ -54,16 +54,18 @@ class TestSoCalGasAPI:
         with pytest.raises(SoCalGasAuthError, match="Browserless Chrome is not configured"):
             asyncio.get_event_loop().run_until_complete(api.authenticate())
 
-    def test_download_without_auth_raises(self, api):
-        """Test that download raises if not authenticated."""
-        from datetime import datetime, timezone
-
+    def test_fetch_monthly_without_auth_raises(self, api):
+        """Test that fetch_monthly raises if not authenticated."""
         with pytest.raises(SoCalGasAuthError, match="Must authenticate"):
             asyncio.get_event_loop().run_until_complete(
-                api.download_green_button(
-                    datetime(2025, 1, 1, tzinfo=timezone.utc),
-                    datetime(2025, 2, 1, tzinfo=timezone.utc),
-                )
+                api.fetch_monthly()
+            )
+
+    def test_fetch_hourly_without_auth_raises(self, api):
+        """Test that fetch_hourly raises if not authenticated."""
+        with pytest.raises(SoCalGasAuthError, match="Must authenticate"):
+            asyncio.get_event_loop().run_until_complete(
+                api.fetch_hourly({"StartDate": "01/01/2025"})
             )
 
     def test_close_without_session(self, api):
@@ -91,13 +93,13 @@ class TestAccountInfo:
         info = AccountInfo(
             account_number="1408090780",
             meter_number="03894524",
-            gnn_id="1408090700",
-            service_location_id="1408090700",
+            gnn_id=1408090700,
+            service_location="1408090700",
         )
         assert info.account_number == "1408090780"
         assert info.meter_number == "03894524"
-        assert info.gnn_id == "1408090700"
-        assert info.service_location_id == "1408090700"
+        assert info.gnn_id == 1408090700
+        assert info.service_location == "1408090700"
 
 
 class TestExceptions:
