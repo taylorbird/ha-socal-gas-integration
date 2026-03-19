@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
-import zipfile
 from datetime import datetime, timedelta, timezone
 
 from homeassistant.components.persistent_notification import (
@@ -22,14 +20,12 @@ from homeassistant.helpers.update_coordinator import (
 from .api import SoCalGasAPI, SoCalGasAuthError, SoCalGasConnectionError
 from .const import (
     CONF_BROWSERLESS_URL,
-    CONF_LOOKBACK_DAYS,
     CONF_PASSWORD,
     CONF_REFRESH_INTERVAL_HOURS,
     CONF_USERNAME,
     DEFAULT_REFRESH_INTERVAL_HOURS,
     DOMAIN,
 )
-from .green_button_parser import parse_green_button_xml
 from .statistics import (
     async_get_existing_states,
     async_get_prior_sums,
@@ -37,14 +33,11 @@ from .statistics import (
     merge_readings_with_existing,
     readings_to_hourly_statistics,
 )
+from .usage_parser import hourly_to_readings
 
 _LOGGER = logging.getLogger(__name__)
 
-# Green Button API returns at most ~31 days per request
-CHUNK_DAYS = 30
-
 CONF_INITIAL_IMPORT_DONE = "initial_import_done"
-MAX_REFRESH_DAYS = 30
 
 
 class SoCalGasCoordinator(DataUpdateCoordinator):
@@ -68,9 +61,9 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> dict:
         """Fetch new data from SoCal Gas.
 
-        On first run after setup, imports historical data based on
-        lookback_days. On all subsequent runs (including after restarts),
-        fetches the last 3 days to catch gaps.
+        On first run after setup, imports all billing cycles with data.
+        On subsequent runs, fetches the current open cycle plus the most
+        recent completed cycle.
         """
         username = self.entry.data.get(CONF_USERNAME)
         password = self.entry.data.get(CONF_PASSWORD)
@@ -124,38 +117,29 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
                 CONF_INITIAL_IMPORT_DONE, False
             )
 
+            # Always fetch billing cycles first
+            cycles = await api.fetch_monthly()
+            await api.verify_account()
+
             if not initial_import_done:
-                lookback = self.entry.data.get(CONF_LOOKBACK_DAYS, 3)
-                start_date = end_date - timedelta(days=lookback)
+                # Import all cycles with data
+                cycles_to_fetch = [
+                    c for c in cycles if c.get("TotalServiceAmount", 0) > 0
+                ]
                 _LOGGER.info(
-                    "Initial import: %d day lookback (%s to %s)",
-                    lookback, start_date.date(), end_date.date(),
+                    "Initial import: %d billing cycles with data",
+                    len(cycles_to_fetch),
                 )
             else:
-                # Dynamic refresh: fetch from the latest statistic in HA
-                # (minus 1 day overlap), capped at MAX_REFRESH_DAYS
-                last_stat = await self._get_latest_statistic_time()
-                if last_stat:
-                    start_date = last_stat - timedelta(days=1)
-                    earliest = end_date - timedelta(days=MAX_REFRESH_DAYS)
-                    if start_date < earliest:
-                        start_date = earliest
-                    days_back = (end_date - start_date).days
-                    _LOGGER.info(
-                        "Refresh: %d days (%s to %s), "
-                        "latest stat was %s",
-                        days_back, start_date.date(), end_date.date(),
-                        last_stat.date(),
-                    )
-                else:
-                    start_date = end_date - timedelta(days=3)
-                    _LOGGER.info(
-                        "Refresh: no existing stats found, "
-                        "fetching last 3 days",
-                    )
+                # Refresh: current open cycle + most recent completed
+                cycles_to_fetch = self._pick_refresh_cycles(cycles)
+                _LOGGER.info(
+                    "Refresh: fetching %d billing cycles",
+                    len(cycles_to_fetch),
+                )
 
-            total_readings = await self._download_range(
-                api, start_date, end_date
+            total_readings = await self._fetch_billing_cycles(
+                api, cycles_to_fetch
             )
 
             # Persist the initial import flag
@@ -203,10 +187,27 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
             return ts
         return None
 
-    async def async_redownload_range(
-        self, start_date: datetime, end_date: datetime
-    ) -> None:
-        """Re-download a specific date range on demand."""
+    @staticmethod
+    def _pick_refresh_cycles(cycles: list[dict]) -> list[dict]:
+        """Pick billing cycles to fetch during a refresh.
+
+        Returns all open cycles (no charge yet) plus the most recent
+        completed cycle so we can catch late-arriving hourly data.
+        """
+        to_fetch = []
+        completed = []
+        for c in cycles:
+            if c.get("TotalServiceAmount", 0) == 0:
+                to_fetch.append(c)
+            else:
+                completed.append(c)
+        if completed:
+            completed.sort(key=lambda c: c.get("FromDate", ""), reverse=True)
+            to_fetch.append(completed[0])
+        return to_fetch
+
+    async def async_redownload_all(self) -> None:
+        """Re-download all billing cycles with data on demand."""
         username = self.entry.data.get(CONF_USERNAME)
         password = self.entry.data.get(CONF_PASSWORD)
         if not username or not password:
@@ -219,98 +220,95 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
             api = SoCalGasAPI(username, password, browserless_url=browserless_url)
             try:
                 await api.authenticate()
-                await self._download_range(
-                    api, start_date, end_date, label="Re-download"
+                await api.verify_account()
+                cycles = await api.fetch_monthly()
+                cycles_to_fetch = [
+                    c for c in cycles if c.get("TotalServiceAmount", 0) > 0
+                ]
+                await self._fetch_billing_cycles(
+                    api, cycles_to_fetch, label="Re-download"
                 )
             except (SoCalGasAuthError, SoCalGasConnectionError) as err:
                 _LOGGER.error("Redownload failed: %s", err)
             finally:
                 await api.close()
 
-    async def _download_range(
+    async def _fetch_billing_cycles(
         self,
         api: SoCalGasAPI,
-        start_date: datetime,
-        end_date: datetime,
+        cycles: list[dict],
         label: str = "Import",
     ) -> int:
-        """Download and import data in chunks. Returns total readings.
+        """Fetch hourly data for billing cycles and import. Returns total new readings.
 
-        Downloads all chunks first, deduplicates readings by hour,
-        then computes cumulative sums once over the complete dataset.
+        Downloads hourly data for each billing cycle, deduplicates readings
+        by hour, then computes cumulative sums once over the complete dataset.
         This prevents sum discontinuities caused by overlapping data
-        between adjacent API chunks.
+        between adjacent billing cycles.
         """
         name_slug = self._name_slug()
-        chunk_start = start_date
-
-        # Calculate total chunks for progress notifications
-        total_days = (end_date - start_date).days
-        total_chunks = max(1, (total_days + CHUNK_DAYS - 1) // CHUNK_DAYS)
-        chunk_num = 0
+        total_cycles = len(cycles)
         label_slug = label.lower().replace(" ", "_")
         notification_id = f"{DOMAIN}_{label_slug}_{name_slug}"
 
-        # Phase 1: Download all chunks, collecting raw readings
+        # Phase 1: Download all cycles, collecting raw readings
         all_readings = []
+        failed_count = 0
 
-        while chunk_start < end_date:
-            chunk_num += 1
-            chunk_end = min(chunk_start + timedelta(days=CHUNK_DAYS), end_date)
+        for cycle_num, cycle in enumerate(cycles, start=1):
+            from_date = cycle.get("FromDate", "?")
+            to_date = cycle.get("ToDate", "?")
 
             _LOGGER.info(
-                "Downloading chunk %d/%d: %s to %s",
-                chunk_num, total_chunks, chunk_start.date(), chunk_end.date(),
+                "Fetching billing cycle %d/%d: %s to %s",
+                cycle_num, total_cycles, from_date, to_date,
             )
 
             async_create(
                 self.hass,
-                f"Downloading data: chunk {chunk_num} of {total_chunks}\n"
-                f"({chunk_start.strftime('%b %d, %Y')} – "
-                f"{chunk_end.strftime('%b %d, %Y')})",
+                f"Fetching billing cycle {cycle_num} of {total_cycles}\n"
+                f"({from_date} – {to_date})",
                 title=f"SoCal Gas {label}",
                 notification_id=notification_id,
             )
 
             try:
-                zip_bytes = await api.download_green_button(
-                    chunk_start, chunk_end
-                )
+                hourly_data = await api.fetch_hourly(cycle)
+                readings = hourly_to_readings(hourly_data)
             except SoCalGasAuthError as err:
                 async_dismiss(self.hass, notification_id)
                 raise ConfigEntryAuthFailed(str(err)) from err
             except SoCalGasConnectionError as err:
-                async_dismiss(self.hass, notification_id)
-                raise UpdateFailed(str(err)) from err
-
-            try:
-                xml_content = self._extract_xml_from_zip(zip_bytes)
-                readings, summary = parse_green_button_xml(xml_content)
+                _LOGGER.error(
+                    "Connection error fetching cycle %d/%d (%s to %s): %s",
+                    cycle_num, total_cycles, from_date, to_date, err,
+                )
+                failed_count += 1
+                continue
             except Exception as err:
-                async_dismiss(self.hass, notification_id)
-                raise UpdateFailed(
-                    f"Failed to parse downloaded data: {err}"
-                ) from err
+                _LOGGER.error(
+                    "Error parsing cycle %d/%d (%s to %s): %s",
+                    cycle_num, total_cycles, from_date, to_date, err,
+                )
+                failed_count += 1
+                continue
 
             if readings:
                 _LOGGER.info(
-                    "Chunk %d/%d: %d readings (%s to %s)",
-                    chunk_num, total_chunks, len(readings),
+                    "Cycle %d/%d: %d readings (%s to %s)",
+                    cycle_num, total_cycles, len(readings),
                     readings[0].start.date(), readings[-1].start.date(),
                 )
                 all_readings.extend(readings)
             else:
                 _LOGGER.info(
-                    "Chunk %d/%d: no data returned for %s to %s",
-                    chunk_num, total_chunks,
-                    chunk_start.date(), chunk_end.date(),
+                    "Cycle %d/%d: no data returned for %s to %s",
+                    cycle_num, total_cycles, from_date, to_date,
                 )
 
-            chunk_start = chunk_end
-
-            # Rate-limit protection: pause between chunks (not after last)
-            if chunk_start < end_date:
-                _LOGGER.info("Sleeping 5s between chunks (rate-limit protection)")
+            # Rate-limit protection: pause between cycles (not after last)
+            if cycle_num < total_cycles:
+                _LOGGER.info("Sleeping 5s between cycles (rate-limit protection)")
                 await asyncio.sleep(5)
 
         # Phase 2: Deduplicate downloaded readings by hour
@@ -370,17 +368,23 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
 
         async_dismiss(self.hass, notification_id)
 
+        failure_info = ""
+        if failed_count > 0:
+            failure_info = f" ({failed_count} cycle(s) failed)"
+
         summary_msg = (
             f"{len(unique_readings)} new readings imported "
             f"({merged[0].start.strftime('%b %d, %Y')} – "
             f"{merged[-1].start.strftime('%b %d, %Y')})"
+            f"{failure_info}"
         )
         _LOGGER.info(
-            "%s complete: %d new readings + %d existing merged (%s to %s)",
+            "%s complete: %d new readings + %d existing merged (%s to %s)%s",
             label, len(unique_readings),
             len(merged) - len(unique_readings),
             merged[0].start.date(),
             merged[-1].start.date(),
+            failure_info,
         )
         async_create(
             self.hass,
@@ -390,13 +394,3 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
         )
 
         return len(unique_readings)
-
-    @staticmethod
-    def _extract_xml_from_zip(zip_bytes: bytes) -> str:
-        """Extract the first XML file from ZIP bytes."""
-        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            xml_files = [n for n in zf.namelist() if n.endswith(".xml")]
-            if not xml_files:
-                raise ValueError("No XML file found in downloaded ZIP")
-            with zf.open(xml_files[0]) as f:
-                return f.read().decode("utf-8")
