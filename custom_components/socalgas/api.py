@@ -313,7 +313,11 @@ class SoCalGasAPI:
                         f"{data.get('Message', '')}"
                     )
                 # Return the billing cycles list
+                # API returns {"Billing": {"BillingCycles": [...]}}
                 if isinstance(data, dict):
+                    billing = data.get("Billing", data)
+                    if isinstance(billing, dict):
+                        return billing.get("BillingCycles", billing.get("billingCycles", []))
                     return data.get("BillingCycles", data.get("billingCycles", []))
                 if isinstance(data, list):
                     return data
