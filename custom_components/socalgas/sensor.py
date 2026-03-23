@@ -57,6 +57,7 @@ class SoCalGasStatusSensor(SensorEntity):
         self, coordinator: SoCalGasCoordinator, entry: ConfigEntry, slug: str,
     ) -> None:
         """Initialize the sensor."""
+        super().__init__()
         self.coordinator = coordinator
         self._entry = entry
         self._attr_unique_id = f"{DOMAIN}_{slug}_status"
