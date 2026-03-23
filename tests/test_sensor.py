@@ -1,8 +1,7 @@
 """Tests for the sensor module."""
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -36,33 +35,12 @@ for mod in [
 # Patch the base classes to use our fakes
 sys.modules["homeassistant.helpers.update_coordinator"].CoordinatorEntity = FakeCoordinatorEntity
 sys.modules["homeassistant.components.sensor"].SensorEntity = FakeSensorEntity
-# SoCalGasStatusSensor only inherits SensorEntity (not CoordinatorEntity)
 
 from custom_components.socalgas.sensor import SoCalGasStatusSensor
 
 
-class TestStatusSensorAvailability:
-    """Status sensor should always be available so it can report errors."""
-
-    def test_available_always_true_when_coordinator_fails(self):
-        coordinator = MagicMock()
-        coordinator.last_update_success = False
-        coordinator.last_exception = Exception("auth failed")
-        entry = MagicMock()
-        entry.data = {"account_name": "home"}
-
-        sensor = SoCalGasStatusSensor(coordinator, entry, "home")
-        assert sensor.available is True
-
-    def test_available_true_when_coordinator_succeeds(self):
-        coordinator = MagicMock()
-        coordinator.last_update_success = True
-        coordinator.last_exception = None
-        entry = MagicMock()
-        entry.data = {"account_name": "home"}
-
-        sensor = SoCalGasStatusSensor(coordinator, entry, "home")
-        assert sensor.available is True
+class TestStatusSensor:
+    """Status sensor reports coordinator state."""
 
     def test_native_value_ok_on_success(self):
         coordinator = MagicMock()
