@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+from homeassistant.util import dt as dt_util
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -57,6 +59,11 @@ class SoCalGasStatusSensor(CoordinatorEntity, SensorEntity):
         self._attr_name = "SoCal Gas Status"
         self._attr_icon = "mdi:fire"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def available(self) -> bool:
+        """Always available so we can report error details."""
+        return True
 
     @property
     def native_value(self) -> str:
@@ -130,13 +137,18 @@ class _SoCalGasStatisticSensor(CoordinatorEntity, SensorEntity):
             statistics_during_period,
         )
 
-        now = datetime.now(tz=timezone.utc)
+        now_local = dt_util.now()  # HA-configured local time
         if self._period == "day":
-            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            start_local = now_local.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
         else:  # month
-            start = now.replace(
+            start_local = now_local.replace(
                 day=1, hour=0, minute=0, second=0, microsecond=0
             )
+        # Convert to UTC for the recorder query
+        start = start_local.astimezone(timezone.utc)
+        now = datetime.now(tz=timezone.utc)
 
         try:
             result = await get_instance(self.hass).async_add_executor_job(
