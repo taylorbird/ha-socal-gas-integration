@@ -12,7 +12,7 @@ class FakeCoordinatorEntity:
         self.coordinator = coordinator
 
 class FakeSensorEntity:
-    pass
+    available = True
 
 # Mock all homeassistant modules
 for mod in [
@@ -36,6 +36,7 @@ for mod in [
 # Patch the base classes to use our fakes
 sys.modules["homeassistant.helpers.update_coordinator"].CoordinatorEntity = FakeCoordinatorEntity
 sys.modules["homeassistant.components.sensor"].SensorEntity = FakeSensorEntity
+# SoCalGasStatusSensor only inherits SensorEntity (not CoordinatorEntity)
 
 from custom_components.socalgas.sensor import SoCalGasStatusSensor
 

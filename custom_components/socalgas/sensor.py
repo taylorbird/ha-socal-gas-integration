@@ -46,24 +46,34 @@ async def async_setup_entry(
     ])
 
 
-class SoCalGasStatusSensor(CoordinatorEntity, SensorEntity):
-    """Sensor showing the integration's current status."""
+class SoCalGasStatusSensor(SensorEntity):
+    """Sensor showing the integration's current status.
+
+    Does not inherit CoordinatorEntity so it stays available even when
+    the coordinator fails — allowing it to report error details.
+    """
 
     def __init__(
         self, coordinator: SoCalGasCoordinator, entry: ConfigEntry, slug: str,
     ) -> None:
         """Initialize the sensor."""
-        super().__init__(coordinator)
+        self.coordinator = coordinator
         self._entry = entry
         self._attr_unique_id = f"{DOMAIN}_{slug}_status"
         self._attr_name = "SoCal Gas Status"
         self._attr_icon = "mdi:fire"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    @property
-    def available(self) -> bool:
-        """Always available so we can report error details."""
-        return True
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to coordinator updates."""
+        self.async_on_remove(
+            self.coordinator.async_add_listener(self._handle_coordinator_update)
+        )
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Write state when coordinator updates."""
+        self.async_write_ha_state()
 
     @property
     def native_value(self) -> str:
