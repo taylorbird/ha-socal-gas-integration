@@ -83,10 +83,9 @@ class SoCalGasStatusSensor(CoordinatorEntity, SensorEntity):
                 attrs["readings_imported"] = data["readings_count"]
         if self.coordinator.last_exception:
             attrs["last_error"] = str(self.coordinator.last_exception)
-        if self.coordinator.last_update_success_time:
-            attrs["last_success"] = (
-                self.coordinator.last_update_success_time.isoformat()
-            )
+        last_success = getattr(self.coordinator, "last_update_success_time", None)
+        if last_success:
+            attrs["last_success"] = last_success.isoformat()
         return attrs
 
 
