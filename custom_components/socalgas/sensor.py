@@ -62,6 +62,10 @@ class SoCalGasStatusSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> str | None:
+        # Return None until the coordinator has attempted at least one update
+        # to avoid string-value validation issues during entity registration.
+        if self.coordinator.data is None and not self.coordinator.last_exception:
+            return None
         if self.coordinator.last_update_success:
             return "ok"
         if self.coordinator.last_exception:
@@ -127,25 +131,25 @@ class _SoCalGasStatisticSensor(CoordinatorEntity, SensorEntity):
 
     async def _update_from_statistics(self) -> None:
         """Query the recorder for the current period's sum."""
-        from homeassistant.components.recorder import get_instance
-        from homeassistant.components.recorder.statistics import (
-            statistics_during_period,
-        )
-
-        now_local = dt_util.now()  # HA-configured local time
-        if self._period == "day":
-            start_local = now_local.replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-        else:  # month
-            start_local = now_local.replace(
-                day=1, hour=0, minute=0, second=0, microsecond=0
-            )
-        # Convert to UTC for the recorder query
-        start = start_local.astimezone(timezone.utc)
-        now = datetime.now(tz=timezone.utc)
-
         try:
+            from homeassistant.components.recorder import get_instance
+            from homeassistant.components.recorder.statistics import (
+                statistics_during_period,
+            )
+
+            now_local = dt_util.now()  # HA-configured local time
+            if self._period == "day":
+                start_local = now_local.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+            else:  # month
+                start_local = now_local.replace(
+                    day=1, hour=0, minute=0, second=0, microsecond=0
+                )
+            # Convert to UTC for the recorder query
+            start = start_local.astimezone(timezone.utc)
+            now = datetime.now(tz=timezone.utc)
+
             result = await get_instance(self.hass).async_add_executor_job(
                 statistics_during_period,
                 self.hass,
@@ -156,23 +160,23 @@ class _SoCalGasStatisticSensor(CoordinatorEntity, SensorEntity):
                 None,
                 {"state"},
             )
+
+            rows = result.get(self._statistic_id, [])
+            if rows:
+                total = sum(
+                    (row.get("state") or 0.0) for row in rows
+                )
+                self._cached_value = round(total, 2)
+            else:
+                self._cached_value = None
+
+            self.async_write_ha_state()
         except Exception:
             _LOGGER.debug(
-                "Could not query statistics for %s", self._statistic_id,
+                "Could not update from statistics for %s",
+                self._statistic_id,
                 exc_info=True,
             )
-            return
-
-        rows = result.get(self._statistic_id, [])
-        if rows:
-            total = sum(
-                (row.get("state") or 0.0) for row in rows
-            )
-            self._cached_value = round(total, 2)
-        else:
-            self._cached_value = None
-
-        self.async_write_ha_state()
 
     @property
     def native_value(self) -> float | None:
