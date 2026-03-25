@@ -121,13 +121,18 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
             await api.verify_account()
 
             if not initial_import_done:
-                # Import all cycles with data
-                cycles_to_fetch = [
+                # Import all completed cycles with data + open cycles
+                # (current billing period, not yet billed but has hourly data)
+                completed = [
                     c for c in cycles if c.get("TotalServiceAmount", 0) > 0
                 ]
+                open_cycles = [
+                    c for c in cycles if c.get("TotalServiceAmount", 0) == 0
+                ]
+                cycles_to_fetch = completed + open_cycles
                 _LOGGER.info(
-                    "Initial import: %d billing cycles with data",
-                    len(cycles_to_fetch),
+                    "Initial import: %d completed + %d open billing cycles",
+                    len(completed), len(open_cycles),
                 )
             else:
                 # Refresh: current open cycle + most recent completed
