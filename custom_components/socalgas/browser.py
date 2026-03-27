@@ -408,7 +408,7 @@ async def browser_authenticate(
 
     account_number = data.get("account_number", "")
     if not account_number:
-        _LOGGER.warning(
+        _LOGGER.debug(
             "Could not capture account number from browser; "
             "it will need to be obtained via API"
         )

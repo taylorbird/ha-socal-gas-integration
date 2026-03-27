@@ -379,9 +379,16 @@ class SoCalGasOptionsFlow(OptionsFlow):
                 await coordinator.async_request_refresh()
             return self.async_abort(reason="redownload_started")
 
+        # Get earliest billing cycle date for the description
+        earliest_date = "unknown"
+        coordinator = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id)
+        if coordinator and coordinator.data:
+            earliest_date = "the beginning"
+
         return self.async_show_form(
             step_id="redownload",
             data_schema=vol.Schema({}),
+            description_placeholders={"earliest_date": earliest_date},
         )
 
     async def async_step_upload(
