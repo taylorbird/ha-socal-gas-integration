@@ -1,6 +1,6 @@
 # SoCal Gas Integration for Home Assistant
 
-<img src="https://github.com/nfox/ha-socal-gas-integration/raw/main/custom_components/socalgas/logo.png" width="128" alt="SoCal Gas logo">
+<img src="https://github.com/taylorbird/ha-socal-gas-integration/raw/main/custom_components/socalgas/logo.png" width="128" alt="SoCal Gas logo">
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-blue?style=for-the-badge&logo=homeassistantcommunitystore&logoColor=ccc)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/HA-2024.1.0+-green?style=for-the-badge&logo=home-assistant&logoColor=ccc)](https://www.home-assistant.io)
