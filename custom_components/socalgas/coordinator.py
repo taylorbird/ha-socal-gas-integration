@@ -76,21 +76,22 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
 
     async def _do_update(self, username: str, password: str, browserless_url: str | None = None) -> dict:
         """Run the actual update (must be called under _download_lock)."""
+        _LOGGER.warning("Starting SoCal Gas data update")
         # Reuse the already-authenticated API from the config flow if
         # available, to avoid a second login that triggers rate limiting.
         pending_api = self.hass.data.get(DOMAIN, {}).pop("pending_api", None)
         if pending_api:
-            _LOGGER.info("Reusing authenticated API from config flow")
+            _LOGGER.warning("Reusing authenticated API from config flow")
             api = pending_api
         else:
-            _LOGGER.info("Creating new API session, will authenticate")
+            _LOGGER.warning("Creating new API session, will authenticate")
             api = SoCalGasAPI(username, password, browserless_url=browserless_url)
         try:
             if not pending_api:
-                _LOGGER.info("Authenticating with SoCal Gas...")
+                _LOGGER.warning("Authenticating with SoCal Gas...")
                 try:
                     account_info = await api.authenticate()
-                    _LOGGER.info("Authentication successful")
+                    _LOGGER.warning("Authentication successful")
                 except SoCalGasAuthError as err:
                     _LOGGER.error("Authentication failed: %s", err)
                     err_msg = str(err).lower()
@@ -117,7 +118,9 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
             )
 
             # Always fetch billing cycles first
+            _LOGGER.warning("Fetching monthly billing cycles...")
             cycles = await api.fetch_monthly()
+            _LOGGER.warning("Got %d billing cycles", len(cycles))
             await api.verify_account()
 
             if not initial_import_done:
@@ -130,14 +133,14 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
                     c for c in cycles if c.get("TotalServiceAmount", 0) == 0
                 ]
                 cycles_to_fetch = completed + open_cycles
-                _LOGGER.info(
+                _LOGGER.warning(
                     "Initial import: %d completed + %d open billing cycles",
                     len(completed), len(open_cycles),
                 )
             else:
                 # Refresh: current open cycle + most recent completed
                 cycles_to_fetch = self._pick_refresh_cycles(cycles)
-                _LOGGER.info(
+                _LOGGER.warning(
                     "Refresh: fetching %d billing cycles",
                     len(cycles_to_fetch),
                 )
@@ -298,14 +301,14 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
                 continue
 
             if readings:
-                _LOGGER.info(
+                _LOGGER.warning(
                     "Cycle %d/%d: %d readings (%s to %s)",
                     cycle_num, total_cycles, len(readings),
                     readings[0].start.date(), readings[-1].start.date(),
                 )
                 all_readings.extend(readings)
             else:
-                _LOGGER.info(
+                _LOGGER.warning(
                     "Cycle %d/%d: no data returned for %s to %s",
                     cycle_num, total_cycles, from_date, to_date,
                 )
@@ -318,7 +321,7 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
         # Phase 2: Deduplicate downloaded readings by hour
         if not all_readings:
             async_dismiss(self.hass, notification_id)
-            _LOGGER.info("No readings in downloaded data")
+            _LOGGER.warning("No readings in downloaded data")
             return 0
 
         hour_map: dict[datetime, object] = {}
@@ -382,7 +385,7 @@ class SoCalGasCoordinator(DataUpdateCoordinator):
             f"{merged[-1].start.strftime('%b %d, %Y')})"
             f"{failure_info}"
         )
-        _LOGGER.info(
+        _LOGGER.warning(
             "%s complete: %d new readings + %d existing merged (%s to %s)%s",
             label, len(unique_readings),
             len(merged) - len(unique_readings),
